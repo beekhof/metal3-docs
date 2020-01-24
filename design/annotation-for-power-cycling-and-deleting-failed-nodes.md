@@ -96,14 +96,14 @@ itself, allowing it to host workloads.
 ## Proposal
 
 This proposal calls for a new controller which watches for the presence of a
-specific Node annotation.  If present, the controller will locate the Machine
-and BareMetalHost host objects via their annotations, and (in serial) use the
-BareMetalHost API to power off the machine, delete the Node, and then power the
-machine back on again.
+specific Machine annotation.  If present, the controller will locate the 
+BareMetalHost host object via its annotation, and (in serial) use the
+[BareMetalHost Reboot API](https://github.com/metal3-io/metal3-docs/pull/48 ) 
+to power cycle the machine, and then delete the Node.
 
-In order to track the state of the recovery workflow, a [new
-CRD](https://github.com/kubevirt/machine-remediation/blob/master/pkg/apis/machineremediation/v1alpha1/machineremediation_types.go)
-is proposed.
+No new CRDs are required to track the state of the recovery workflow, as most 
+of it will be handled by the Reboot API.  Any remaining state will be stored as
+JSON text in Machine annotations.
 
 ### User Stories
 
@@ -115,45 +115,41 @@ recover exclusive workloads and restore cluster capacity.
 
 ### Implementation Details/Notes/Constraints [optional]
 
-The controller includes logic for power cycling a node.  
-
-As rebooting (software) and power cycling (hardware) a machine is a long
-running multi-step process, there are currently discussions around the creation
-of a public mechanism for requesting initiating these processes atomically.
-
-While it is likely that the work proposed here may make use of such
-functionality once it exists, it should not be considered a pre-requisite for
-the purposes of evaluating this proposal.
+The controller shall be called machine-remediator-baremetal
+The annotation to trigger remediation is `machine.openshift.io/external-remediation`
+The annotation to trigger the reboot API is `host.metal3.io/reboot`
 
 ### Risks and Mitigations
 
-RBAC rules will be needed to ensure that only specific roles can trigger
+~RBAC rules will be needed to ensure that only specific roles can trigger
 machines to reboot. Without this, the system would be exposed to DoS style
-attacks.
+attacks~.
 
 ## Design Details
 
-See [PoC code](https://github.com/kubevirt/machine-remediation/)
-
-- A new [Machine Remediation CRD](https://github.com/kubevirt/machine-remediation/blob/master/pkg/apis/machineremediation/v1alpha1/machineremediation_types.go)
-- Two new controllers:
-  - [node reboot](https://github.com/kubevirt/machine-remediation/tree/master/pkg/controllers/nodereboot) which looks for the annoation and creates Machine Remediation CRs
-  - [machine remediation](https://github.com/kubevirt/machine-remediation/tree/master/pkg/controllers/machineremediation) which reboots the machine and deletes the Node object (which also erases the signalling annotation)
-- A new annotation (namespace and name is open for discussion)
+- One new controller that:
+  - looks for the Machine annotation
+  - decides what action should be taken
+  - stores existing Node annotations and Labels in an annotation on the Machine
+  - uses the Reboot API to power cycle the machine
+  - deletes the Node object (signaling to the scheduler that it is safe to recover resources)
+  - waits for the Node to be re-registered
+  - restores any missing Annotations and Labels
 
 ### Work Items
 
-- Make any requested modifications
-- Create a PR from  https://github.com/kubevirt/machine-remediation/ into https://github.com/metal3-io/cluster-api-provider-baremetal
+- Create an implementation in the master branch of https://github.com/openshift/cluster-api-provider-baremetal
 
 ### Dependencies
+
+Implement [BareMetalHost Reboot API](https://github.com/metal3-io/metal3-docs/pull/48 ) in the master branch of https://github.com/metal3-io/baremetal-operator
 
 This design is intended to integrate with OpenShift’s [Machine Healthcheck
 implementation](https://github.com/openshift/machine-api-operator/blob/master/pkg/controller/machinehealthcheck/machinehealthcheck_controller.go#L407)
 
 ### Test Plan
 
-Unit tests are included in the code-base.
+Unit tests are to be included in the code-base.
 
 In addition we will develop end-to-end test plans that cover both transient and
 permanent failures, as well as negative-flow tests where the IPMI in
